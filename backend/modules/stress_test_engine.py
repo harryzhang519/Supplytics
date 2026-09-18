@@ -1,11 +1,30 @@
 """
 Digital Wind Tunnel — Monte Carlo Stress Test Engine.
+
 Generates black-swan scenarios via Gemini, runs each through the tiered
 blast-radius engine, and ranks critical failure points proactively.
+
+Revenue-at-Risk methodology
+---------------------------
+Each scenario produces a *distribution* of revenue-at-risk values via a true
+Monte Carlo simulation (default N=1000 iterations).
+
+For every iteration we sample:
+  • severity_factor  — triangular distribution around severity/10 (the LLM
+    classifier is an estimate with inherent uncertainty, ±0.15 spread).
+  • duration_fraction — clipped normal distribution around the lookup-table
+    duration in weeks (operational duration has real variance, σ = 30%).
+  • bom_fraction      — **deterministic** (derived from actual BOM graph edges;
+    this is known structure, not an estimate, so it must not be randomised).
+
+Outputs include mean, p50, p95 and std of the simulated distribution so
+planners can use conservative (p95) figures without ignoring central estimates.
 """
 
 import json
 import logging
+import random
+import statistics
 import concurrent.futures
 from services.vertex_simulator import vertex_ai
 from services.spanner_simulator import graph_db
@@ -150,16 +169,24 @@ def run_scenario(scenario: dict) -> dict:
                 if not any(x["id"] == prod["id"] for x in all_products):
                     all_products.append(prod)
 
-    # ── Calibrated Revenue-at-Risk (matches orchestrator.py logic) ────
-    # Instead of naively summing 100% of annual revenue, scale by:
-    #   1. Severity factor:   severity / 10
-    #   2. Duration fraction: estimated disruption weeks / 52
-    #   3. BOM concentration: fraction of each product's components affected
-    severity = classification.get("severity", 5)
-    severity_factor = severity / 10.0
+    # ── Monte Carlo Revenue-at-Risk Simulation ───────────────────────────────
+    # Severity and duration are estimates (LLM classifier + lookup table) with
+    # real uncertainty, so we sample them from probability distributions.
+    # BOM fraction is kept deterministic — it comes from actual graph structure
+    # (real BOM edges), not an estimate, so randomising it would add noise, not
+    # realism.
+    MC_ITERATIONS = 1000
 
-    duration_weeks = {1: 0.5, 2: 1, 3: 1.5, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 10, 10: 12}.get(severity, 3)
-    duration_fraction = duration_weeks / 52.0
+    severity = classification.get("severity", 5)
+
+    # Central (mode) values for the distributions
+    severity_mode = severity / 10.0
+    duration_weeks_mean = {1: 0.5, 2: 1, 3: 1.5, 4: 2, 5: 3,
+                           6: 4, 7: 5, 8: 6, 9: 10, 10: 12}.get(severity, 3)
+
+    # Triangular distribution bounds for severity_factor
+    sev_lo = max(0.0, severity_mode - 0.15)
+    sev_hi = min(1.0, severity_mode + 0.15)
 
     # Collect IDs of all affected components from blast radius traversal
     affected_component_ids = set()
@@ -172,17 +199,44 @@ def run_scenario(scenario: dict) -> dict:
             if comp.get("type") == "Component":
                 affected_component_ids.add(comp["id"])
 
-    total_revenue = 0
+    # Pre-compute deterministic BOM fractions once (graph structure, not an estimate)
     all_bom_edges = graph_db.get_edges(edge_type="USED_IN")
+    product_bom_data = []  # list of (annual_revenue, bom_fraction)
     for prod in all_products:
         prod_bom_size = sum(1 for e in all_bom_edges if e["target_id"] == prod["id"])
         affected_in_bom = sum(1 for e in all_bom_edges
                               if e["target_id"] == prod["id"] and e["source_id"] in affected_component_ids)
         bom_fraction = affected_in_bom / max(prod_bom_size, 1)
-        product_exposure = prod.get("annual_revenue", 0) * severity_factor * duration_fraction * bom_fraction
-        total_revenue += product_exposure
+        product_bom_data.append((prod.get("annual_revenue", 0), bom_fraction))
 
-    total_revenue = round(total_revenue)
+    # ── Run N Monte Carlo iterations ─────────────────────────────────────────
+    # Severity and duration are sampled from distributions; BOM fraction is fixed
+    # (real graph structure, not an estimate — randomising it would add noise, not insight).
+    mc_samples = []
+    for _ in range(MC_ITERATIONS):
+        # Sample severity factor from triangular distribution
+        sampled_severity = random.triangular(sev_lo, sev_hi, severity_mode)
+
+        # Sample disruption duration (weeks) from clipped normal distribution
+        raw_duration = random.gauss(duration_weeks_mean, duration_weeks_mean * 0.3)
+        sampled_duration_weeks = max(0.0, raw_duration)  # clip to non-negative
+        sampled_duration_fraction = sampled_duration_weeks / 52.0
+
+        iteration_total = sum(
+            annual_rev * sampled_severity * sampled_duration_fraction * bom_frac
+            for annual_rev, bom_frac in product_bom_data
+        )
+        mc_samples.append(iteration_total)
+
+    # ── Summarise the distribution ────────────────────────────────────────────
+    mc_samples_sorted = sorted(mc_samples)
+    revenue_at_risk_mean = statistics.mean(mc_samples) if mc_samples else 0.0
+    revenue_at_risk_p50 = statistics.median(mc_samples) if mc_samples else 0.0
+    p95_index = max(0, int(len(mc_samples_sorted) * 0.95) - 1)
+    revenue_at_risk_p95 = mc_samples_sorted[p95_index] if mc_samples_sorted else 0.0
+    revenue_at_risk_std = statistics.stdev(mc_samples) if len(mc_samples) > 1 else 0.0
+
+    total_revenue = round(revenue_at_risk_mean)
 
     # Recommend pre-emptive actions based on graph, fallback to LLM suggestions
     preemptive_actions = _recommend_preemptive_actions(all_tier1, all_products, total_revenue)
@@ -196,17 +250,24 @@ def run_scenario(scenario: dict) -> dict:
                 "timeline": "This week"
             })
 
-    # Calculate post-mitigation R@R
+    # Calculate post-mitigation R@R (based on mean exposure)
     mitigated_revenue = total_revenue
     if preemptive_actions:
         # Assume preemptive actions (like stock builds or diversification) reduce exposure by ~65%
         mitigated_revenue = round(total_revenue * 0.35)
-    
+
     risk_reduction = total_revenue - mitigated_revenue
 
     return {
         **scenario,
+        # Backward-compatible single value (mean of simulation)
         "revenue_at_risk": total_revenue,
+        # Full Monte Carlo distribution summary
+        "revenue_at_risk_mean": round(revenue_at_risk_mean),
+        "revenue_at_risk_p50": round(revenue_at_risk_p50),
+        "revenue_at_risk_p95": round(revenue_at_risk_p95),
+        "revenue_at_risk_std": round(revenue_at_risk_std),
+        "simulation_iterations": MC_ITERATIONS,
         "post_mitigation_revenue": mitigated_revenue,
         "risk_reduction": risk_reduction,
         "tier1_suppliers_impacted": len(all_tier1),
