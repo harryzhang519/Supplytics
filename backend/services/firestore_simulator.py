@@ -77,16 +77,7 @@ class FirestoreSimulator:
         return dot / (norm_a * norm_b)
 
 
-# ── Singleton export — toggle between real and simulated ─────────
-from config import USE_REAL_FIRESTORE
-
-if USE_REAL_FIRESTORE:
-    try:
-        from services.firestore_service import FirestoreService
-        firestore_db = FirestoreService()
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"⚠️  Failed to init real Firestore: {e} — falling back to simulator")
-        firestore_db = FirestoreSimulator()
-else:
-    firestore_db = FirestoreSimulator()
+# ── Singleton export ─────────────────────────────────────────────────
+# Instantiated and exported by services/firestore_factory.py.
+# Import firestore_db from there, not here.
+firestore_db = FirestoreSimulator()

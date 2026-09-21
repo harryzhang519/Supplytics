@@ -19,9 +19,17 @@ class FirestoreService:
 
     def __init__(self):
         self.db = firestore.Client(project=GCP_PROJECT_ID, database=FIRESTORE_DATABASE)
-        # Probe the database to trigger 404 early if it doesn't exist
-        list(self.db.collection("health_check").limit(1).stream())
-        logger.info(f"✅ Firestore initialized — project={GCP_PROJECT_ID}")
+        # Probe the database to trigger auth errors early (non-fatal)
+        try:
+            list(self.db.collection("health_check").limit(1).stream())
+            logger.info(f"✅ Firestore initialized — project={GCP_PROJECT_ID}")
+        except Exception as e:
+            logger.warning(
+                f"⚠️  Firestore health-check probe failed ({type(e).__name__}: {e}). "
+                "The client was created but may not have access."
+            )
+            # Re-raise so firestore_factory can catch it and fall back to simulator
+            raise
 
     def add_document(self, collection, data, doc_id=None):
         """Add a document to a collection. Returns the document ID."""

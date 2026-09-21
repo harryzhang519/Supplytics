@@ -1,0 +1,52 @@
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ── Virtual environments ─────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets & environment ────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Node / frontend ──────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+.npm
+
+# ── IDEs ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── GCP credentials ──────────────────────────────────────────────────
+*.json
+!backend/package-lock.json
+!frontend/package-lock.json
+application_default_credentials.json
+gcloud/
+
+# ── Misc ─────────────────────────────────────────────────────────────
+.cache/
+*.tmp
+*.bak

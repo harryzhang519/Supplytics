@@ -35,19 +35,43 @@ class VertexAISimulator:
         """
         Structured response simulating Gemini 1.5 Pro output.
         Uses persona-specific templates for realistic multi-agent debate.
+
+        If GEMINI_API_KEY is configured (and google-generativeai is installed),
+        routes non-classifier calls through the live Gemini REST API first.
+        Falls back to deterministic templates on any error.
         """
+        # Classifier is always local — deterministic keyword matching
+        if persona == "classifier":
+            return self._classifier_response(prompt)
+
+        # Try live Gemini REST API if a key is configured
+        try:
+            from services.gemini_service import gemini_call, is_gemini_available
+            if is_gemini_available():
+                import json as _json
+                context_str = _json.dumps(context or {}, default=str)
+                full_prompt = (
+                    f"[Persona: {persona or 'general'}]\n"
+                    f"[Context: {context_str[:1000]}]\n\n"
+                    f"{prompt}"
+                )
+                live_response = gemini_call(full_prompt)
+                if live_response:
+                    return live_response
+        except Exception:
+            pass  # Fall through to simulator templates
+
         if persona == "logistics_agent":
             return self._logistics_response(context or {})
         elif persona == "finance_agent":
             return self._finance_response(context or {})
         elif persona == "synthesis":
             return self._synthesis_response(context or {})
-        elif persona == "classifier":
-            return self._classifier_response(prompt)
         elif persona == "email_generator":
             return self._email_response(context or {})
         else:
             return self._general_response(prompt)
+
 
     # ── Persona templates ────────────────────────────────────────────
 
