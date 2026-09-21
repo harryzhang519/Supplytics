@@ -2,7 +2,7 @@
 
 from flask import Blueprint, request, jsonify
 import time
-from services.firestore_simulator import firestore_db
+from services.firestore_factory import firestore_db
 
 actions_bp = Blueprint("actions", __name__)
 

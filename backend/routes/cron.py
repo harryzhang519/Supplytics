@@ -3,7 +3,7 @@ from modules.finviz_scraper import scrape_finviz_news
 from modules.ingestion import ingest_signal
 from modules.classifier import classifier as high_speed_classifier
 from modules.orchestrator import analyze_disruption
-from services.firestore_simulator import firestore_db
+from services.firestore_factory import firestore_db
 import logging
 import time
 import threading

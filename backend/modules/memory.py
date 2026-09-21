@@ -3,7 +3,7 @@ Memory & Reflection System — Lesson storage, retrieval, and continuous improve
 Uses Firestore for persistent memory and similarity search for context injection.
 """
 
-from services.firestore_simulator import firestore_db
+from services.firestore_factory import firestore_db
 from services.vertex_simulator import vertex_ai
 
 
